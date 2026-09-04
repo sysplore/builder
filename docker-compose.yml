@@ -1,0 +1,182 @@
+x-common-image: &common_image
+  image: ${BUILDER_IMAGE:-mitexleo/sysplore-builder}:${BUILDER_TAG:-latest}
+  restart: ${RESTART_POLICY:-unless-stopped}
+
+x-configurator-dep: &configurator_dep
+  depends_on:
+    configurator:
+      condition: service_completed_successfully
+
+x-backend-volumes: &backend_volumes
+  volumes:
+    - sites:/home/frappe/frappe-bench/sites
+    - logs:/home/frappe/frappe-bench/logs
+
+x-backend-service: &backend_service
+  <<: [*common_image, *configurator_dep, *backend_volumes]
+
+services:
+  configurator:
+    <<: *common_image
+    entrypoint:
+      - bash
+      - -c
+    command:
+      - >
+        ls -1 apps > sites/apps.txt;
+        bench set-config -g db_host $$DB_HOST;
+        bench set-config -gp db_port $$DB_PORT;
+        bench set-config -g redis_cache "redis://$$REDIS_CACHE";
+        bench set-config -g redis_queue "redis://$$REDIS_QUEUE";
+        bench set-config -g redis_socketio "redis://$$REDIS_QUEUE";
+        bench set-config -gp socketio_port $$SOCKETIO_PORT;
+        bench set-config -g developer_mode $$DEVELOPER_MODE;
+        bench set-config -g server_script_enabled $$SERVER_SCRIPT_ENABLED;
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      SOCKETIO_PORT: "9000"
+      DEVELOPER_MODE: "${DEVELOPER_MODE:-0}"
+      SERVER_SCRIPT_ENABLED: "${SERVER_SCRIPT_ENABLED:-1}"
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      db:
+        condition: service_healthy
+
+  create-site:
+    image: ${BUILDER_IMAGE:-mitexleo/sysplore-builder}:${BUILDER_TAG:-latest}
+    entrypoint:
+      - bash
+      - -c
+    command:
+      - >
+        wait-for-it -t 120 db:3306;
+        wait-for-it -t 120 redis-cache:6379;
+        wait-for-it -t 120 redis-queue:6379;
+        export start=`date +%s`;
+        until [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".db_host // empty"` ]] && \
+          [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_cache // empty"` ]] && \
+          [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_queue // empty"` ]];
+        do
+          echo "Waiting for sites/common_site_config.json to be created";
+          sleep 5;
+          if (( `date +%s`-start > 120 )); then
+            echo "could not find sites/common_site_config.json with required keys";
+            exit 1
+          fi
+        done;
+        echo "sites/common_site_config.json found";
+        if [ -d "sites/$$SITE_NAME" ]; then
+          echo "Site $$SITE_NAME already exists, skipping creation";
+        else
+          echo "Creating site $$SITE_NAME...";
+          bench new-site --mariadb-user-host-login-scope='%' --admin-password=$$SITE_ADMIN_PASSWORD --db-root-username=root --db-root-password=$$DB_PASSWORD --install-app builder $$SITE_NAME;
+        fi;
+    environment:
+      SITE_NAME: "${SITE_NAME:-frontend}"
+      SITE_ADMIN_PASSWORD: "${SITE_ADMIN_PASSWORD:-admin}"
+      DB_PASSWORD: "${DB_PASSWORD:-admin}"
+      DB_HOST: db
+      DB_PORT: "3306"
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+
+  backend:
+    <<: *backend_service
+    environment:
+      GUNICORN_THREADS: ${GUNICORN_THREADS:-4}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
+    depends_on:
+      create-site:
+        condition: service_completed_successfully
+
+  frontend:
+    <<: *common_image
+    command:
+      - nginx-entrypoint.sh
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      FRAPPE_SITE_NAME_HEADER: ${FRAPPE_SITE_NAME_HEADER:-$$host}
+      UPSTREAM_REAL_IP_ADDRESS: ${UPSTREAM_REAL_IP_ADDRESS:-127.0.0.1}
+      UPSTREAM_REAL_IP_HEADER: ${UPSTREAM_REAL_IP_HEADER:-X-Forwarded-For}
+      UPSTREAM_REAL_IP_RECURSIVE: ${UPSTREAM_REAL_IP_RECURSIVE:-off}
+      PROXY_READ_TIMEOUT: ${PROXY_READ_TIMEOUT:-120}
+      CLIENT_MAX_BODY_SIZE: ${CLIENT_MAX_BODY_SIZE:-50m}
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      - backend
+      - websocket
+    ports:
+      - "${HTTP_PUBLISH_PORT:-8080}:8080"
+
+  websocket:
+    <<: *backend_service
+    command:
+      - node
+      - /home/frappe/frappe-bench/apps/frappe/socketio.js
+
+  queue-short:
+    <<: *backend_service
+    command:
+      - bench
+      - worker
+      - --queue
+      - short,default
+
+  queue-long:
+    <<: *backend_service
+    command:
+      - bench
+      - worker
+      - --queue
+      - long,default,short
+
+  scheduler:
+    <<: *backend_service
+    command:
+      - bench
+      - schedule
+
+  db:
+    image: mariadb:11.8
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 5s
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-admin}
+      MARIADB_ROOT_PASSWORD: ${DB_PASSWORD:-admin}
+    volumes:
+      - db-data:/var/lib/mysql
+
+  redis-cache:
+    image: redis:7.2-alpine
+
+  redis-queue:
+    image: redis:7.2-alpine
+    volumes:
+      - redis-queue-data:/data
+
+volumes:
+  db-data:
+  redis-queue-data:
+  sites:
+  logs:
