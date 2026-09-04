@@ -13,7 +13,7 @@ on:
 
 env:
   DOCKER_IMAGE: mitexleo/sysplore-builder
-  FRAPPE_BRANCH: version-15
+  FRAPPE_BRANCH: version-16
   FRAPPE_REPO: frappe/frappe
 
 permissions:

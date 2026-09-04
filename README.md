@@ -6,7 +6,7 @@ We build and publish the image, so you don't have to. Copy the `docker-compose.y
 
 ## What's inside
 
-- **Frappe** (core framework) — `version-15` branch
+- **Frappe** (core framework) — `version-16` branch
 - **Builder** — the latest `master` release of [frappe/builder](https://github.com/frappe/builder)
 
 The image is built with the official [frappe_docker](https://github.com/frappe/frappe_docker) layered image so it stays lean and follows the upstream conventions.
@@ -91,7 +91,7 @@ This repository builds and publishes the image automatically with GitHub Actions
 ]
 ```
 
-`frappe/frappe` (`version-15`) is always included as the framework.
+`frappe/frappe` (`version-16`) is always included as the framework.
 
 ### Build triggers
 
@@ -111,7 +111,7 @@ This repository builds and publishes the image automatically with GitHub Actions
 
 1. Clones [frappe_docker](https://github.com/frappe/frappe_docker).
 2. Runs its `images/layered/Containerfile` with:
-   - `FRAPPE_BRANCH=version-15` for the framework,
+   - `FRAPPE_BRANCH=version-16` for the framework,
    - `apps.json` (from this repo) passed as a BuildKit secret so the Builder app is installed during `bench init`.
 3. Pushes the result to Docker Hub.
 
@@ -128,7 +128,7 @@ This repository builds and publishes the image automatically with GitHub Actions
 git clone https://github.com/frappe/frappe_docker
 docker build \
   --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
-  --build-arg=FRAPPE_BRANCH=version-15 \
+  --build-arg=FRAPPE_BRANCH=version-16 \
   --secret=id=apps_json,src=apps.json \
   --tag=local-sysplore-builder:test \
   --file=frappe_docker/images/layered/Containerfile .
