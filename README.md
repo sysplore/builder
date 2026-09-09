@@ -59,8 +59,6 @@ The compose file is pre-configured to work out of the box. Everything that commo
 | `SITE_ADMIN_PASSWORD` | `admin` | Administrator login password — **change this in production** |
 | `HTTP_PUBLISH_PORT` | `8080` | Host port the site is published on |
 | `FRAPPE_SITE_NAME_HEADER` | `$$host` | Site name resolved by host header |
-| `DEVELOPER_MODE` | `0` | Set to `1` for development |
-| `SERVER_SCRIPT_ENABLED` | `1` | Enables server-side scripts in Frappe |
 | `GUNICORN_THREADS` / `GUNICORN_WORKERS` / `GUNICORN_TIMEOUT` | `4` / `2` / `120` | Web server concurrency and timeouts |
 | `UPSTREAM_REAL_IP_*` | internal defaults | Client IP handling behind proxies |
 | `PROXY_READ_TIMEOUT` | `120` | nginx proxy read timeout |
