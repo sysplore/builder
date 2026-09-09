@@ -24,7 +24,13 @@ The published image is `mitexleo/sysplore-builder` on [Docker Hub](https://hub.d
 
 1. Copy the `docker-compose.yml` from this repository to your server.
 
-2. Change the config values at the top of the file (see [Configuration](#configuration) below).
+2. Create your `.env` from the example:
+
+   ```bash
+   cp example.env .env
+   ```
+
+   Change the config values you care about (see [Configuration](#configuration) below).
 
 3. Start the stack:
 
@@ -42,7 +48,7 @@ The published image is `mitexleo/sysplore-builder` on [Docker Hub](https://hub.d
 
 ### Configuration
 
-The compose file is pre-configured to work out of the box. Everything that commonly changes is an environment variable with a sane default:
+The compose file is pre-configured to work out of the box. Everything that commonly changes is set via `.env` (copied from `example.env`) and has a sane default:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -55,6 +61,12 @@ The compose file is pre-configured to work out of the box. Everything that commo
 | `FRAPPE_SITE_NAME_HEADER` | `$$host` | Site name resolved by host header |
 | `DEVELOPER_MODE` | `0` | Set to `1` for development |
 | `SERVER_SCRIPT_ENABLED` | `1` | Enables server-side scripts in Frappe |
+| `GUNICORN_THREADS` / `GUNICORN_WORKERS` / `GUNICORN_TIMEOUT` | `4` / `2` / `120` | Web server concurrency and timeouts |
+| `UPSTREAM_REAL_IP_*` | internal defaults | Client IP handling behind proxies |
+| `PROXY_READ_TIMEOUT` | `120` | nginx proxy read timeout |
+| `CLIENT_MAX_BODY_SIZE` | `50m` | Max upload body size (raise alongside the app's upload limit) |
+
+The `example.env` file documents every variable with explanations, so copy it, tweak, and run.
 
 ### What happens on first run
 
