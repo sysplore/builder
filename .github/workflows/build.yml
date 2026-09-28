@@ -181,9 +181,27 @@ jobs:
           CURRENT_BRANCH=$(git branch --show-current)
           git add tracks/${{ matrix.track }}/REPO_VERSIONS.json tracks/${{ matrix.track }}/VERSION
           git commit -m "Update ${{ matrix.track }} versions and bump to ${{ steps.version.outputs.new_version }}" || true
-          # Pull --rebase to avoid conflicts with concurrent runs
-          git pull --rebase origin "$CURRENT_BRANCH" || true
-          git push origin "$CURRENT_BRANCH" || true
+          # Both tracks commit to the same branch concurrently. Retry fetch/rebase/push
+          # so a losing push race is retried instead of silently dropping the bump.
+          PUSHED=false
+          for i in 1 2 3 4 5; do
+            git fetch origin "$CURRENT_BRANCH"
+            if git rebase "origin/$CURRENT_BRANCH"; then
+              if git push origin "$CURRENT_BRANCH"; then
+                PUSHED=true
+                echo "Pushed version bump on attempt $i"
+                break
+              fi
+            else
+              git rebase --abort || true
+            fi
+            echo "Push attempt $i failed, retrying..."
+            sleep 5
+          done
+          if [ "$PUSHED" != "true" ]; then
+            echo "Failed to push version bump after retries"
+            exit 1
+          fi
 
       - name: Clone frappe_docker
         if: steps.check_updates.outputs.changed == 'true'
