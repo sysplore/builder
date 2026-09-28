@@ -6,14 +6,14 @@ We build and publish the image, so you don't have to. Copy the `docker-compose.y
 
 ## What's inside
 
-- **Frappe** (core framework) — `version-16` branch
-- **Builder** — the `develop` branch of [frappe/builder](https://github.com/frappe/builder) (latest features, unreleased)
+Two image lines are published from this repository, both on the **Frappe `version-16`** framework:
 
-> **Deploying to production?** Pin `BUILDER_TAG` to a specific version (e.g. `1.0.42`) in your `.env` rather than `latest`. Builder is tracked on `develop`, so `latest` moves with upstream. See [Stability](#stability).
+- **`stable`** — Builder **`master`** (released) — recommended for production
+- **`latest`** / **`edge`** — Builder **`develop`** (newest features, unreleased, moves frequently)
 
-The image is built with the official [frappe_docker](https://github.com/frappe/frappe_docker) layered image so it stays lean and follows the upstream conventions.
+The images are built with the official [frappe_docker](https://github.com/frappe/frappe_docker) layered build so they stay lean and follow upstream conventions.
 
-The published image is `mitexleo/sysplore-builder` on [Docker Hub](https://hub.docker.com/r/mitexleo/sysplore-builder).
+The published images are on [Docker Hub](https://hub.docker.com/r/mitexleo/sysplore-builder) as `mitexleo/sysplore-builder`.
 
 ## Deploy
 
@@ -55,7 +55,7 @@ The compose file is pre-configured to work out of the box. Everything that commo
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `BUILDER_IMAGE` | `mitexleo/sysplore-builder` | Image to run |
-| `BUILDER_TAG` | `latest` | Image tag (pin to a version for reproducible deploys) |
+| `BUILDER_TAG` | `stable` | Image tag: `stable`, `latest`/`edge`, or a pinned version |
 | `DB_PASSWORD` | `admin` | MariaDB root password — **change this in production** |
 | `SITE_NAME` | `frontend` | Frappe site name (used internally) |
 | `SITE_ADMIN_PASSWORD` | `admin` | Administrator login password — **change this in production** |
@@ -86,59 +86,75 @@ docker compose up -d
 
 The site data is preserved in the named volumes; only the application code updates.
 
-### Stability
+### Choosing a line
 
-Builder is tracked on its upstream **`develop`** branch, which carries the newest features and fixes but is unreleased and moves frequently. To keep deployments predictable:
+Pick the line with `BUILDER_TAG`:
 
-1. Every build publishes an immutable, numbered tag (e.g. `mitexleo/sysplore-builder:1.0.42`) alongside `latest`.
-2. In production, set `BUILDER_TAG` to a specific version you have tested, never `latest`.
-3. To upgrade, change `BUILDER_TAG` to a newer version, then `docker compose pull && docker compose up -d`.
-4. To roll back, set `BUILDER_TAG` back to the previous version.
+| `BUILDER_TAG` | Line | Source | Tags |
+| --- | --- | --- | --- |
+| `stable` (default) | Stable | Builder `master` | moving `stable` |
+| `latest` / `edge` | Edge | Builder `develop` | moving `latest`, `edge` |
+| `1.1.0` | Stable, pinned | Builder `master` | immutable version |
+| `edge-1.0.6` | Edge, pinned | Builder `develop` | immutable version |
+
+Suggestions:
+
+- **Production:** use `stable`, or pin a specific version (e.g. `BUILDER_TAG=1.1.0`) so upgrades are deliberate and rollback is trivial.
+- **You need an unreleased Builder feature:** use `latest`/`edge`, ideally pinned to a tested `edge-<version>`.
+- Each build publishes an immutable version tag, so you can always roll back by setting `BUILDER_TAG` to an earlier one.
 
 Browse available versions on [Docker Hub](https://hub.docker.com/r/mitexleo/sysplore-builder/tags).
 
-## How the image is built
+## How the images are built
 
-This repository builds and publishes the image automatically with GitHub Actions.
+This repository builds and publishes both lines automatically with GitHub Actions.
 
-### Apps
+### Tracks
 
-`apps.json` declares which Frappe apps the image contains:
+Each line is defined by a track directory:
+
+```
+tracks/
+  stable/   Builder master   -> tags: stable,   <version>
+  edge/     Builder develop  -> tags: latest, edge, <version>-edge
+```
+
+Each track has its own `apps.json`, `VERSION`, and `REPO_VERSIONS.json`:
 
 ```json
 [
   {
     "url": "https://github.com/frappe/builder",
-    "branch": "develop"
+    "branch": "master"
   }
 ]
 ```
 
-`frappe/frappe` (`version-16`) is always included as the framework.
+`frappe/frappe` (`version-16`) is always included as the framework and is tracked per track in `REPO_VERSIONS.json`.
 
 ### Build triggers
 
-- **Scheduled** — every 6 hours the workflow checks the tracked branches for new commits.
+- **Scheduled** — every 6 hours the workflow checks each track's branches for new commits.
 - **Manual** — use the *Run workflow* button in the Actions tab, optionally with **force_build** to rebuild even when nothing changed.
 
 ### Versioning
 
-- `VERSION` holds the current image version (semantic, e.g. `1.0.0`).
-- `REPO_VERSIONS.json` records the exact commit SHA of each tracked repository in the last build.
-- When any tracked repo changes, the workflow:
-  1. bumps the patch version in `VERSION`,
+- `tracks/<track>/VERSION` holds that track's current version (semantic, e.g. `1.0.0`).
+- `tracks/<track>/REPO_VERSIONS.json` records the exact commit SHA of each tracked repository in that track's last build.
+- When a tracked repo changes in a track, the workflow:
+  1. bumps that track's patch version,
   2. rebuilds the image,
-  3. pushes it to Docker Hub as both `mitexleo/sysplore-builder:<version>` and `mitexleo/sysplore-builder:latest`.
+  3. pushes it to Docker Hub as its immutable version tag plus its moving tag(s).
+
+The two tracks version independently, and their version tags never collide (`1.1.x` for stable, `edge-1.0.x` for edge). Stable starts at `1.1.0` because the `1.0.x` tags were produced by the earlier single-track (develop) builds.
 
 ### Build process
 
 1. Clones [frappe_docker](https://github.com/frappe/frappe_docker).
-2. Runs this repo's `Containerfile` (copied into the build context) against the `version-16` base images with:
-   - `FRAPPE_BRANCH=version-16` for the framework,
-   - `apps.json` (from this repo) passed as a BuildKit secret so the Builder app is installed during `bench init`.
+2. Builds against the `version-16` base images with `FRAPPE_BRANCH=version-16` and the track's `apps.json` passed as a BuildKit secret.
+   - **stable** uses frappe_docker's `images/layered/Containerfile` directly.
+   - **edge** uses this repo's `Containerfile`, which extends the layered build: it vendors two framework `ui` modules that Builder `develop` imports (`@framework/ui/telemetry` and `@framework/ui/components/TrialBanner`) but that only exist on Frappe's `develop` branch.
 3. Pushes the result to Docker Hub.
-
-`Containerfile` extends frappe_docker's layered build with one step: it vendors two framework `ui` modules that Builder `develop` imports (`@framework/ui/telemetry` and `@framework/ui/components/TrialBanner`) but that only exist on Frappe's `develop` branch. That is what lets Builder `develop` compile on the `version-16` framework.
 
 ## Development
 
@@ -147,18 +163,34 @@ This repository builds and publishes the image automatically with GitHub Actions
 - Docker Engine v23+ (for BuildKit secrets)
 - `jq` and `curl` for local testing
 
-### Build the image locally
+### Build an image locally
+
+The edge track (Builder `develop`):
 
 ```bash
 git clone --depth 1 https://github.com/frappe/frappe_docker
-cp apps.json frappe_docker/apps.json
+cp tracks/edge/apps.json frappe_docker/apps.json
 cp Containerfile frappe_docker/Containerfile.custom
 docker build \
   --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
   --build-arg=FRAPPE_BRANCH=version-16 \
-  --secret=id=apps_json,src=apps.json \
-  --tag=local-sysplore-builder:test \
+  --secret=id=apps_json,src=frappe_docker/apps.json \
+  --tag=local-sysplore-builder:edge \
   --file=frappe_docker/Containerfile.custom \
+  frappe_docker
+```
+
+The stable track (Builder `master`) uses the stock layered Containerfile:
+
+```bash
+git clone --depth 1 https://github.com/frappe/frappe_docker
+cp tracks/stable/apps.json frappe_docker/apps.json
+docker build \
+  --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
+  --build-arg=FRAPPE_BRANCH=version-16 \
+  --secret=id=apps_json,src=frappe_docker/apps.json \
+  --tag=local-sysplore-builder:stable \
+  --file=frappe_docker/images/layered/Containerfile \
   frappe_docker
 ```
 

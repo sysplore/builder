@@ -1,5 +1,5 @@
 x-common-image: &common_image
-  image: ${BUILDER_IMAGE:-mitexleo/sysplore-builder}:${BUILDER_TAG:-latest}
+  image: ${BUILDER_IMAGE:-mitexleo/sysplore-builder}:${BUILDER_TAG:-stable}
   restart: always
 
 x-configurator-dep: &configurator_dep
@@ -46,7 +46,7 @@ services:
         condition: service_healthy
 
   create-site:
-    image: ${BUILDER_IMAGE:-mitexleo/sysplore-builder}:${BUILDER_TAG:-latest}
+    image: ${BUILDER_IMAGE:-mitexleo/sysplore-builder}:${BUILDER_TAG:-stable}
     restart: "no"
     entrypoint:
       - bash

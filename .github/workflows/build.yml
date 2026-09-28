@@ -1,4 +1,4 @@
-name: Build Frappe Builder Custom Image
+name: Build Frappe Builder Images
 
 on:
   schedule:
@@ -20,17 +20,31 @@ permissions:
   contents: write
   packages: write
 
-concurrency:
-  group: build-frappe-builder-image
-  cancel-in-progress: false
-
 jobs:
-  check-updates:
+  build:
     runs-on: ubuntu-latest
-    outputs:
-      has_changes: ${{ steps.check_updates.outputs.changed }}
-      new_version: ${{ steps.version.outputs.new_version }}
-      cache_bust: ${{ steps.cache_bust.outputs.value }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Stable release line: Builder master, on the version-16 framework.
+          - track: stable
+            builder_branch: master
+            moving_tags: "stable"
+            version_suffix: ""
+            containerfile: images/layered/Containerfile
+          # Edge line: Builder develop, backported onto the version-16 framework.
+          - track: edge
+            builder_branch: develop
+            moving_tags: "latest edge"
+            version_suffix: "-edge"
+            containerfile: Containerfile.custom
+
+    concurrency:
+      group: build-${{ matrix.track }}
+      cancel-in-progress: false
 
     steps:
       - name: Checkout Repository
@@ -39,19 +53,20 @@ jobs:
       - name: Validate required files
         id: validate_files
         run: |
-          if [ ! -f "apps.json" ]; then
-            echo "Error: apps.json not found"
+          TRACK_DIR="tracks/${{ matrix.track }}"
+          if [ ! -f "$TRACK_DIR/apps.json" ]; then
+            echo "Error: $TRACK_DIR/apps.json not found"
             exit 1
           fi
           CREATED_FILES=false
-          if [ ! -f "REPO_VERSIONS.json" ]; then
-            echo "Creating REPO_VERSIONS.json with empty object"
-            echo "{}" > REPO_VERSIONS.json
+          if [ ! -f "$TRACK_DIR/REPO_VERSIONS.json" ]; then
+            echo "Creating $TRACK_DIR/REPO_VERSIONS.json with empty object"
+            echo "{}" > "$TRACK_DIR/REPO_VERSIONS.json"
             CREATED_FILES=true
           fi
-          if [ ! -f "VERSION" ]; then
-            echo "Creating VERSION file with initial version"
-            echo "1.0.0" > VERSION
+          if [ ! -f "$TRACK_DIR/VERSION" ]; then
+            echo "Creating $TRACK_DIR/VERSION with initial version"
+            echo "1.0.0" > "$TRACK_DIR/VERSION"
             CREATED_FILES=true
           fi
           echo "created_files=$CREATED_FILES" >> $GITHUB_OUTPUT
@@ -62,8 +77,8 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           CURRENT_BRANCH=$(git branch --show-current)
-          git add REPO_VERSIONS.json VERSION
-          git commit -m "Initialize REPO_VERSIONS.json and VERSION files" || true
+          git add tracks/${{ matrix.track }}/REPO_VERSIONS.json tracks/${{ matrix.track }}/VERSION
+          git commit -m "Initialize tracks/${{ matrix.track }} files" || true
           git pull --rebase origin "$CURRENT_BRANCH" || true
           git push origin "$CURRENT_BRANCH" || true
 
@@ -71,16 +86,17 @@ jobs:
         id: cache_bust
         run: |
           # Combine apps.json content + current repo versions for cache invalidation
-          APPS_HASH=$(sha256sum apps.json | awk '{print $1}')
-          VERSION_HASH=$(sha256sum REPO_VERSIONS.json 2>/dev/null | awk '{print $1}' || echo "no-versions")
+          APPS_HASH=$(sha256sum tracks/${{ matrix.track }}/apps.json | awk '{print $1}')
+          VERSION_HASH=$(sha256sum tracks/${{ matrix.track }}/REPO_VERSIONS.json 2>/dev/null | awk '{print $1}' || echo "no-versions")
           COMBINED_HASH=$(echo "${APPS_HASH}-${VERSION_HASH}" | sha256sum | awk '{print $1}')
           echo "value=$COMBINED_HASH" >> $GITHUB_OUTPUT
 
       - name: Check for updates via git ls-remote
         id: check_updates
         run: |
+          TRACK_DIR="tracks/${{ matrix.track }}"
           CHANGED=false
-          CURRENT_VERSIONS=$(cat REPO_VERSIONS.json)
+          CURRENT_VERSIONS=$(cat "$TRACK_DIR/REPO_VERSIONS.json")
 
           # Check frappe/frappe (framework, not in apps.json)
           echo "Checking $FRAPPE_REPO branch: $FRAPPE_BRANCH..."
@@ -127,7 +143,7 @@ jobs:
             else
               echo "  $REPO unchanged"
             fi
-          done < <(jq -c '.[]' apps.json)
+          done < <(jq -c '.[]' "$TRACK_DIR/apps.json")
 
           # Check if force build is requested
           if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
@@ -135,25 +151,26 @@ jobs:
             CHANGED=true
           fi
 
-          echo "$CURRENT_VERSIONS" > REPO_VERSIONS.json
+          echo "$CURRENT_VERSIONS" > "$TRACK_DIR/REPO_VERSIONS.json"
           echo "changed=$CHANGED" >> $GITHUB_OUTPUT
 
           if [ "$CHANGED" = "false" ]; then
-            echo "No updates detected. Build will be skipped."
+            echo "No updates detected for ${{ matrix.track }}. Build will be skipped."
           else
-            echo "Updates detected or force build requested. Proceeding with build."
+            echo "Updates detected for ${{ matrix.track }}. Proceeding with build."
           fi
 
       - name: Increment image version
         if: steps.check_updates.outputs.changed == 'true'
         id: version
         run: |
-          CURRENT_VERSION=$(cat VERSION)
+          TRACK_DIR="tracks/${{ matrix.track }}"
+          CURRENT_VERSION=$(cat "$TRACK_DIR/VERSION")
           IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
           NEW_PATCH=$((patch + 1))
           NEW_VERSION="$major.$minor.$NEW_PATCH"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "$NEW_VERSION" > VERSION
+          echo "$NEW_VERSION" > "$TRACK_DIR/VERSION"
           echo "Version bumped to: $NEW_VERSION"
 
       - name: Commit updated files
@@ -162,66 +179,61 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           CURRENT_BRANCH=$(git branch --show-current)
-          git add REPO_VERSIONS.json VERSION
-          git commit -m "Update versions and bump to ${{ steps.version.outputs.new_version }}" || true
+          git add tracks/${{ matrix.track }}/REPO_VERSIONS.json tracks/${{ matrix.track }}/VERSION
+          git commit -m "Update ${{ matrix.track }} versions and bump to ${{ steps.version.outputs.new_version }}" || true
           # Pull --rebase to avoid conflicts with concurrent runs
           git pull --rebase origin "$CURRENT_BRANCH" || true
           git push origin "$CURRENT_BRANCH" || true
 
-  build-and-push:
-    needs: check-updates
-    if: needs.check-updates.outputs.has_changes == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+      - name: Clone frappe_docker
+        if: steps.check_updates.outputs.changed == 'true'
+        run: git clone --depth 1 https://github.com/frappe/frappe_docker
 
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v6
+      - name: Copy build files into context
+        if: steps.check_updates.outputs.changed == 'true'
+        run: |
+          cp tracks/${{ matrix.track }}/apps.json frappe_docker/apps.json
+          cp Containerfile frappe_docker/Containerfile.custom
 
       - name: Setup QEMU
+        if: steps.check_updates.outputs.changed == 'true'
         uses: docker/setup-qemu-action@v4
         with:
           image: tonistiigi/binfmt:latest
           platforms: all
 
       - name: Setup Buildx
+        if: steps.check_updates.outputs.changed == 'true'
         uses: docker/setup-buildx-action@v4
 
-      - name: Clone frappe_docker
-        run: git clone --depth 1 https://github.com/frappe/frappe_docker
-
-      - name: Copy build files into context
-        run: |
-          cp apps.json frappe_docker/apps.json
-          cp Containerfile frappe_docker/Containerfile.custom
-
       - name: Login to Docker Hub
+        if: steps.check_updates.outputs.changed == 'true'
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build Docker image
+      - name: Build and push image
+        if: steps.check_updates.outputs.changed == 'true'
         env:
-          NEW_VERSION: ${{ needs.check-updates.outputs.new_version }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
         run: |
+          VERSIONED_TAG="${NEW_VERSION}${{ matrix.version_suffix }}"
+          echo "Building ${{ matrix.track }} -> $VERSIONED_TAG"
           cd frappe_docker
           docker buildx build \
             --build-arg=FRAPPE_PATH=https://github.com/frappe/frappe \
             --build-arg=FRAPPE_BRANCH=${{ env.FRAPPE_BRANCH }} \
             --build-arg=FRAPPE_IMAGE_PREFIX=frappe \
-            --build-arg=CACHE_BUST=${{ needs.check-updates.outputs.cache_bust }}-${{ github.run_id }} \
+            --build-arg=CACHE_BUST=${{ steps.cache_bust.outputs.value }}-${{ github.run_id }} \
             --secret id=apps_json,src=${{ github.workspace }}/frappe_docker/apps.json \
             --cache-from type=registry,ref=${{ env.DOCKER_IMAGE }}:latest \
             --cache-to type=inline \
             --load \
-            --tag ${{ env.DOCKER_IMAGE }}:$NEW_VERSION \
-            --tag ${{ env.DOCKER_IMAGE }}:latest \
-            --file Containerfile.custom .
-
-      - name: Push Docker image
-        env:
-          NEW_VERSION: ${{ needs.check-updates.outputs.new_version }}
-        run: |
-          docker push "${{ env.DOCKER_IMAGE }}:$NEW_VERSION"
-          docker push "${{ env.DOCKER_IMAGE }}:latest"
+            --tag "${{ env.DOCKER_IMAGE }}:$VERSIONED_TAG" \
+            --file ${{ matrix.containerfile }} .
+          for t in ${{ matrix.moving_tags }}; do
+            docker tag "${{ env.DOCKER_IMAGE }}:$VERSIONED_TAG" "${{ env.DOCKER_IMAGE }}:$t"
+            docker push "${{ env.DOCKER_IMAGE }}:$t"
+          done
+          docker push "${{ env.DOCKER_IMAGE }}:$VERSIONED_TAG"
